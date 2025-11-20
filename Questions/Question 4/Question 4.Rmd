@@ -1,0 +1,157 @@
+---
+title: "Question 4 : Volatility and Garch estimates"
+author: "Tapiwa Nyamupachitu"
+date: "2025-11-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load required libraries
+library(tidyverse)
+library(lubridate)
+library(here)
+
+# Set working directory to project root for reproducibility
+setwd(here::here())
+
+# Load currency datasets
+cncy       <- read_rds("Questions/Question 4/Data/currencies.rds")
+cncy_carry <- read_rds("Questions/Question 4/Data/cncy_Carry.rds")
+cncy_value <- read_rds("Questions/Question 4/Data/cncy_value.rds")
+cncy_iv    <- read_rds("Questions/Question 4/Data/cncyIV.rds")
+bbdxy      <- read_rds("Questions/Question 4/Data/bbdxy.rds")
+```
+
+### Introduction 
+In this section, I explored the behavior of the South African rand (ZAR) through the lens of volatility, valuation and carry-related performance. This was all done with the goal of addressing the statements outlined in the question. Using a mix of realised and implied volatility, alongside value-based regime analysis, I aim to build an empirical case around how ZAR has behaved relative to other G10 currencies and under different market conditions. While the carry performance segment was less conclusive due to limitations in the dataset, the volatility and valuation dimensions offer a clear and robust story.
+
+### Volatility Analysis
+To assess whether ZAR has indeed been one of the most volatile currencies, I began by constructing a 30-day rolling annualised volatility measure for ZAR and a selection of peer currencies, namely Brazil and Japan. These comparisons provide a useful benchmark — Brazil often reflects high beta EM dynamics, while Japan serves as a more defensive counterpart.
+```{r}
+# Volatilty analysis
+# Will calculate both realized volatilty and implied volatility
+
+# Realized volatility
+# Measure 30-day rolling annualised volaitility of ZAR comparing with other major currencies
+
+# Load required packages
+library(slider)
+library(scales)
+
+# Step 1) Define currencies to analyse
+major_currencies <- c("SouthAfrica_Cncy", "US_Cncy", "Euro_Cncy",
+                      "UK_Cncy", "Japan_Cncy", "Australia_Cncy",
+                      "Brazil_Cncy")
+
+# Step 2) Filter and Compute log returns
+vol_data <- cncy %>%
+    filter(Name %in% major_currencies) %>%
+    arrange(Name, date) %>%
+    group_by(Name) %>%
+    mutate(
+        ret = log(Price / lag(Price))
+    ) %>%
+    filter(!is.na(ret)) %>%
+    # Rolling 30-day annualised vol: std dev × sqrt(252)
+    mutate(
+        vol_30d = slide_dbl(ret, sd, .before = 29, .complete = TRUE) * sqrt(252)
+    ) %>%
+    ungroup()
+```
+
+```{r}
+# Step 3) Quick Plot of ZAR vs others
+vol_data %>%
+    filter(Name %in% c("SouthAfrica_Cncy", "Brazil_Cncy", "Australia_Cncy", "Japan_Cncy")) %>%
+    ggplot(aes(x = date, y = vol_30d, color = Name)) +
+    geom_line(size = 0.8, alpha = 0.8) +
+    scale_y_continuous(labels = percent_format(accuracy = 1)) +
+    labs(
+        title = "30-Day Rolling Annualised Volatility",
+        subtitle = "ZAR vs Selected Peers",
+        x = "Date", y = "Annualised Volatility",
+        color = "Currency"
+    ) +
+    theme_minimal()
+```
+
+The plot above makes it immediately clear that ZAR has persistently exhibited elevated levels of volatility. Its realised volatility often peaks sharply during global risk events and tends to remain structurally higher even in calmer periods. Brazil follows a similar profile, albeit with slightly more exaggerated spikes in the early part of the sample. In contrast, Japan's volatility is not only lower but also far more stable. This supports the argument that ZAR is one of the more volatile currencies globally, especially within the EM-G10 crossover group.
+
+Beyond realised volatility, I also examined implied volatility to capture forward-looking market expectations. This is particularly important because it reflects sentiment and perceived risk rather than just historical return variation.
+
+```{r}
+# Step 1) Filter for selected IV series
+iv_plot_data <- cncy_iv %>%
+    filter(Name %in% c("SouthAfrica_IV", "Brazil_IV", "Japan_IV")) %>%
+    mutate(Name = str_replace(Name, "_IV", ""))  # clean label
+
+# Step 2) Plot
+ggplot(iv_plot_data, aes(x = date, y = Price, color = Name)) +
+    geom_line(alpha = 0.8) +
+    labs(
+        title = "Implied Volatility Comparison",
+        subtitle = "ZAR vs Selected Peers",
+        y = "Implied Volatility (%)",
+        x = "Date",
+        color = "Currency"
+    ) +
+    theme_minimal()
+```
+
+Once again, the ZAR stands out with consistently elevated implied volatility levels. It reacts strongly to global shocks and often prices in more uncertainty than its peers. What is notable is the alignment between implied and realised volatility. ZAR's risk is not only backward-looking but also embedded in market pricing going forward. From both realised and implied metrics, the evidence strongly supports the idea that ZAR has been one of the most volatile currencies over the past few decades.
+
+### Valuation and Risk-on Behaviour
+
+The second part of the question focuses on whether ZAR performs well during periods when currency valuations are relatively cheap. To test this, I constructed a time series of cumulative ZAR returns, stratified by valuation deciles. I defined the top 30% of observations (when ZAR is ‘cheap’ based on the value signal) as the high-value regime.
+
+```{r}
+# Step 1) Compute ZAR daily returns
+zar_value <- cncy_value %>%
+    arrange(date) %>%
+    mutate(
+        ret = Price / lag(Price) - 1
+    )
+
+# Step 2) Create value quantiles for ZAR
+zar_value <- zar_value %>%
+    mutate(
+        value_quantile = ntile(Price, 10),  # Deciles
+        is_cheap = value_quantile >= 8      # Top 30% = "cheap"
+    )
+
+# Step 3) Calculate cumulative returns by regime
+zar_value_plot <- zar_value %>%
+    filter(!is.na(ret)) %>%
+    group_by(is_cheap) %>%
+    arrange(date) %>%
+    mutate(cum_return = cumprod(1 + ret)) %>%
+    ungroup()
+```
+
+```{r}
+# Step 4: Plot
+ggplot(zar_value_plot, aes(x = date, y = cum_return, color = factor(is_cheap))) +
+    geom_line(size = 1) +
+    labs(
+        title = "ZAR Cumulative Return in Cheap vs Expensive Valuation Regimes",
+        subtitle = "Based on ZAR’s Own Value Deciles (Top 30% = Cheap)",
+        x = "Date", y = "Cumulative Return",
+        color = "ZAR Cheap?"
+    ) +
+    theme_minimal()
+```
+
+The results are quite intuitive. The ZAR tends to perform better when it is undervalued. The return profile in these periods is not only positive but also relatively smoother and more persistent compared to the lower-value regime. This suggests that ZAR responds favourably when investors perceive it as cheap, which often coincides with risk-on environments and supportive global liquidity. While this doesn’t fully capture the carry trade dynamics, it does confirm that valuation plays a meaningful role in ZAR performance.
+
+
+### Conclusion 
+
+To conclude, although the carry section was less conclusive (Struggled finding identifiers in the provided dataset) the broader conclusions remain well-supported. ZAR’s elevated volatility is clearly evidenced both in backward and forward-looking metrics. Additionally, its tendency to outperform in undervalued regimes reinforces the idea that it benefits during episodes of global risk appetite and dollar strength.
+
+Taken together, the data paints a consistent picture of the rand as a high-volatility, risk-sensitive currency that is capable of delivering returns when the backdrop aligns. This is particularly true when valuations are favourable and global sentiment is constructive.
+
+

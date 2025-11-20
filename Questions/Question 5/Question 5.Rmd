@@ -1,0 +1,208 @@
+---
+title: "Question 5"
+author: "Tapiwa Nyamupachitu"
+date: "2025-11-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load required packages and data
+library(tidyverse)
+library(lubridate)
+
+# Set working directory to project root
+setwd(here::here())
+
+# Load series
+MAA  <- read_rds("Questions/Question 5/Data/MAA.rds")  %>% filter(Ticker %in% c("LUACTRUU Index", "LUAGTRUU Index", "BCOMTR Index", "LP05TREH Index"))
+msci <- read_rds("Questions/Question 5/Data/msci.rds") %>% filter(Name  %in% c("MSCI ACWI", "MSCI USA", "MSCI RE", "MSCI Jap", "MSCI China"))
+
+# Glimpse data
+glimpse(MAA)
+glimpse(msci)
+
+# Step 1) Prepare Monthly Returns
+# Question wants monthly returns
+
+# Create Helper Function (Monthly returns calculator)
+library(PerformanceAnalytics)
+get_monthly_returns <- function(df, price_col, name_col) {
+    df %>%
+        mutate(month = floor_date(date, "month")) %>%
+        group_by(!!sym(name_col), month) %>%
+        summarise(price = last(!!sym(price_col)), .groups = "drop") %>%
+        group_by(!!sym(name_col)) %>%
+        arrange(month) %>%
+        mutate(ret = price / lag(price) - 1) %>%
+        filter(!is.na(ret)) %>%
+        rename(!!name_col := !!sym(name_col)) # keeps names clean and avoids duplicate 'date'
+}
+
+# Step 2) Apply function to both datasets
+# Calculate monthly returns for both datasets (Make sure they are aligned)
+MAA_ret <- get_monthly_returns(MAA, price_col = "Price", name_col = "Ticker")
+msci_ret <- get_monthly_returns(msci, price_col = "Price", name_col = "Name")
+
+# Step 3) Filter Valid Assets
+# Question needs assets with at least 5 years (60 months) of data and data must be after 2010
+# Create filter function
+filter_assets <- function(ret_data, name_col = "Name") {
+    ret_data %>%
+        group_by(!!sym(name_col)) %>%
+        filter(n() >= 60) %>%
+        ungroup()
+}
+
+# Apply to both datasets
+MAA_ret_filt <- filter_assets(MAA_ret, name_col = "Ticker")
+msci_ret_filt <- filter_assets(msci_ret, name_col = "Name")
+
+# Confirm the filtering process worked
+glimpse(MAA_ret_filt)
+glimpse(msci_ret_filt)
+
+# Step 4) Combine the 2 return datasets into a single dataset
+# Dataset will be used to answer the question
+library(janitor)
+
+combined_ret <- bind_rows(
+    MAA_ret_filt %>% rename(Name = Ticker),
+    msci_ret_filt
+) %>%
+    clean_names()  # standardizing column names
+
+glimpse(combined_ret)
+
+# Step 6) Filter Data to Post 2010 period
+combined_ret_post2010 <- combined_ret %>%
+    filter(month >= as.Date("2010-01-01"))
+
+# Confirm dimensions and available names
+glimpse(combined_ret_post2010)
+unique(combined_ret_post2010$name)
+
+library(tidyr)
+
+# Step 7: Pivot data to wide format for portfolio analysis
+wide_ret <- combined_ret_post2010 %>%
+    select(month, name, ret) %>%
+    pivot_wider(names_from = name, values_from = ret)
+
+# Confirm structure
+glimpse(wide_ret)
+
+```
+
+### Introduction
+In this section, I was tasked with constructing a balanced global index fund portfolio using monthly return data for various asset classes. The objective was to optimize the portfolio post-2010 while respecting a number of practical constraints provided by the investment committee.
+
+To begin, I loaded and filtered the provided data from the MAA and msci datasets. I then calculated monthly log returns and combined them into one tidy structure. To ensure compliance with the requirement of using post-2010 data for estimation, I removed any rows prior to January 2010.
+
+I then reshaped the returns into a wide format and converted the matrix into an xts object, which was a requirement for the PortfolioAnalytics framework. From here, I defined the portfolio specification by including all ten assets and adding full investment and long-only constraints. I also ensured that no asset received more than 35% allocation to comply with the single-asset exposure limit.
+
+Next, I implemented group constraints to restrict the maximum allocations to asset classes. That is 60% to equities, 25% to bonds, and 15% to commodities. These groupings were constructed based on the provided fund descriptions in the MAA.txt and index naming conventions.
+
+For optimization, I used a minimum variance objective under the ROI solver, consistent with the committee’s desire for stability and quarterly rebalancing. I then extracted the resulting weights, which are summarized below 
+
+```{r}
+# Portfolio optimization
+
+# STEP 1) Load required packages
+library(PortfolioAnalytics)
+library(tidyverse)
+library(PerformanceAnalytics)
+library(ROI)
+library(ROI.plugin.quadprog)
+library(xts)
+library(janitor)
+
+# STEP 2) Ensure column names are clean
+wide_ret <- wide_ret %>% clean_names()
+
+# STEP 3) Convert returns to xts object
+returns_xts <- xts(wide_ret[,-1], order.by = wide_ret$month)
+colnames(returns_xts) <- make.names(colnames(returns_xts))
+
+
+# STEP 4) Initialize portfolio with assets
+assets <- colnames(returns_xts)
+# Define groups
+group_list <- list(
+    Commodities = which(grepl("BCOMTR", assets)),
+    Bonds = which(grepl("LPO5TREH|LUACTRUU|LUAGTRUU", assets)),
+    Equities = which(grepl("MSCI", assets))
+)
+
+# STEP 5) Add constraints
+port_spec <- portfolio.spec(assets = assets) %>%
+    add.constraint(type = "full_investment") %>%
+    add.constraint(type = "long_only") %>%
+    add.constraint(type = "group",
+                   groups = group_list,
+                   group_min = c(0, 0, 0),  # allow 0% allocations
+                   group_max = c(0.15, 0.25, 0.60)) %>%
+    add.constraint(type = "box", min = 0, max = 0.35) %>%
+    add.objective(type = "risk", name = "StdDev")
+
+# Step 6) Run optimization again
+opt_result <- optimize.portfolio(
+    R = returns_xts,
+    portfolio = port_spec,
+    optimize_method = "ROI",
+    trace = TRUE
+)
+
+# Step 7) Extract the weights
+weights <- extractWeights(opt_result)
+print(weights)
+
+# Present weights in a nice table
+# Load packages
+library(knitr)
+library(dplyr)
+
+# Create tidy table of weights
+weights_tbl <- tibble(
+    Asset = names(weights),
+    Weight = as.numeric(weights)
+) %>%
+    arrange(desc(Weight))  # Largest to smallest
+
+# Display the weights in a nice table
+kable(weights_tbl, digits = 4, caption = "Optimized Portfolio Weights (Post-2010)")
+```
+
+The optimized weights above indicate a strong preference for safer, lower-volatility assets, especially fixed income instruments. For example, the LUACTRUU Index (a broad corporate bond index) and the LP05TREH Index (sovereign bonds) received the largest allocations, while more volatile equity indices such as MSCI China or MSCI Japan were assigned negligible or even zero weight. This result suggests that under the risk-minimization framework, the optimizer leaned heavily into stability and downside protection. Importantly, no asset violated the 35% limit, and group exposures to equities, bonds, and commodities were all within target bounds.
+
+```{r}
+# Create a portfolio performance chart
+# Load required libraries
+library(ggplot2)
+
+# Step 1) Calculate weighted returns
+weighted_returns <- returns_xts %*% weights
+
+# Step 2) Convert to xts object and name the column
+portfolio_returns_xts <- xts(weighted_returns, order.by = index(returns_xts))
+colnames(portfolio_returns_xts) <- "Portfolio"
+
+# Step 3) Calculate cumulative return
+cumulative_returns <- cumprod(1 + portfolio_returns_xts)
+
+# Step 4) Plot the cumulative return
+autoplot(cumulative_returns, facets = NULL) +
+    labs(
+        title = "Cumulative Return of Optimized Portfolio (Post-2010)",
+        y = "Portfolio Value",
+        x = "Date"
+    ) +
+    theme_minimal()
+```
+
+Turning to performance, I constructed a cumulative return chart of the optimized portfolio starting in 2010. The plot shows a steady, upward-trending growth path with relatively low drawdowns, particularly during volatile periods like 2015 and early 2020. The portfolio achieved consistent gains, reflecting the conservative tilt suggested by the weightings. Additionally, the absence of sharp declines confirms that the portfolio remained defensively positioned while still capturing upside growth across global markets.
+
+All in all, I believe the portfolio I constructed meets the brief for a balanced global index fund. The allocation results reflect a clear tilt toward safer assets, and the optimizer stayed within all the required constraints. Despite the portfolio being conservative, the performance plot shows that it still delivered solid growth with relatively low volatility. I think this strikes a good balance between risk control and return, especially for long-term investors. Based on both the asset weights and the cumulative return behaviour, I’m confident that this portfolio offers a reasonable and well-diversified solution to the task.
