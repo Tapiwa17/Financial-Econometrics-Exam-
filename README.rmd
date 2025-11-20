@@ -5,9 +5,6 @@ output: html_document
 
 
 # Financial Econometrics Practical Exam
-
-This submission contains my answers for the 2025 Financial Econometrics practical. The structure follows the required format, with all data placed in the `/data/` folder, and one subfolder for each question under `/Questions/`. Below I walk through my process and thinking for each question.
-
 ---
 
 ```{r setup, include=FALSE}
@@ -357,8 +354,8 @@ library(lubridate)
 getwd()
 
 # Load data for Question 2
-holdrets <- read_rds("Questions/Question 3/Data/Hold_Rets_Sectors.rds")
-port_holds <- read_rds("Questions/Question 3/Data/Fund_Holds.rds")
+holdrets <- read_rds("Data/Hold_Rets_Sectors.rds")
+port_holds <- read_rds("Data/Fund_Holds.rds")
 
 # Quick peek at structure
 glimpse(holdrets)
@@ -560,8 +557,8 @@ library(tidyverse)
 library(lubridate)
  install.packages("here")
 # Load return and fund holdings data (relative to project root)
-holdrets <- read_rds("Questions/Question 3/Data/Hold_Rets_Sectors.rds")
-port_holds <- read_rds("Questions/Question 3/Data/Fund_Holds.rds")
+holdrets <- read_rds("Data/Hold_Rets_Sectors.rds")
+port_holds <- read_rds("Data/Fund_Holds.rds")
 ```
 
 
@@ -809,11 +806,11 @@ library(here)
 setwd(here::here())
 
 # Load currency datasets
-cncy       <- read_rds("Questions/Question 4/Data/currencies.rds")
-cncy_carry <- read_rds("Questions/Question 4/Data/cncy_Carry.rds")
-cncy_value <- read_rds("Questions/Question 4/Data/cncy_value.rds")
-cncy_iv    <- read_rds("Questions/Question 4/Data/cncyIV.rds")
-bbdxy      <- read_rds("Questions/Question 4/Data/bbdxy.rds")
+cncy       <- read_rds("Data/currencies.rds")
+cncy_carry <- read_rds("Data/cncy_Carry.rds")
+cncy_value <- read_rds("Data/cncy_value.rds")
+cncy_iv    <- read_rds("Data/cncyIV.rds")
+bbdxy      <- read_rds("Data/bbdxy.rds")
 ```
 
 Realised Volatility
@@ -957,8 +954,8 @@ library(lubridate)
 setwd(here::here())
 
 # Load series
-MAA  <- read_rds("Questions/Question 5/Data/MAA.rds")  %>% filter(Ticker %in% c("LUACTRUU Index", "LUAGTRUU Index", "BCOMTR Index", "LP05TREH Index"))
-msci <- read_rds("Questions/Question 5/Data/msci.rds") %>% filter(Name  %in% c("MSCI ACWI", "MSCI USA", "MSCI RE", "MSCI Jap", "MSCI China"))
+MAA  <- read_rds("Data/MAA.rds")  %>% filter(Ticker %in% c("LUACTRUU Index", "LUAGTRUU Index", "BCOMTR Index", "LP05TREH Index"))
+msci <- read_rds("Data/msci.rds") %>% filter(Name  %in% c("MSCI ACWI", "MSCI USA", "MSCI RE", "MSCI Jap", "MSCI China"))
 ```
 
 Data preparation 
