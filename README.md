@@ -1,0 +1,1576 @@
+README
+================
+
+## \# Financial Econometrics Practical Exam
+
+### Question 1: Fund Comparison and Performance Attribution
+
+For this question, I analyzed the ABC_Fund’s risk and return profile
+relative to its benchmark and active manager peers. I began by cleaning
+and merging the data using dplyr and lubridate, ensuring the date fields
+were properly parsed.
+
+``` r
+# Loading the datasets 
+Benchmark <- read_rds("data/Capped_SWIX.rds")
+Active_Managers <- read_rds("data/Active_Managers.rds")
+ABC_Fund <- read_rds("data/ABC_Fund.rds")  # Check for underscore error when typing
+```
+
+I then calculated the rolling 36-month beta of ABC_Fund against the
+benchmark using a sliding window regression. This rolling beta gave
+insight into how the fund’s market sensitivity evolved over time.
+
+``` r
+# Date conversion
+Benchmark <- Benchmark %>% mutate(date = ymd(date))
+Active_Managers <- Active_Managers %>% mutate(date = ymd(date))
+ABC_Fund <- ABC_Fund %>% mutate(date = ymd(date))
+
+# Confirm if date conversion was successful
+str(Benchmark)
+```
+
+    ## tibble [311 × 3] (S3: tbl_df/tbl/data.frame)
+    ##  $ date   : Date[1:311], format: "1999-12-31" "2000-01-31" ...
+    ##  $ Name   : chr [1:311] "FTSE/JSE Capped SWIX" "FTSE/JSE Capped SWIX" "FTSE/JSE Capped SWIX" "FTSE/JSE Capped SWIX" ...
+    ##  $ Returns: num [1:311] 0.13111 -0.0129 -0.0617 0.00822 -0.06129 ...
+
+``` r
+# Calculate a rolling 36-month (3-year) beta of ABC_Fund returns against Benchmark returns 
+
+# Step 1 : Joining ABC_Fund with Benchmark 
+
+# Merge ABC_Fund with Benchmark returns by date
+ABC_vs_BM <- ABC_Fund %>%
+  left_join(Benchmark, by = "date", suffix = c("_ABC", "_BM"))
+
+# Quick check
+head(ABC_vs_BM)
+```
+
+    ## # A tibble: 6 × 5
+    ##   date       Returns_ABC Name_ABC Name_BM              Returns_BM
+    ##   <date>           <dbl> <chr>    <chr>                     <dbl>
+    ## 1 2012-07-31     0.0350  ABC_Fund FTSE/JSE Capped SWIX     0.0319
+    ## 2 2012-08-31     0.0303  ABC_Fund FTSE/JSE Capped SWIX     0.0271
+    ## 3 2012-09-30     0.00671 ABC_Fund FTSE/JSE Capped SWIX     0.0120
+    ## 4 2012-10-31     0.0340  ABC_Fund FTSE/JSE Capped SWIX     0.0329
+    ## 5 2012-11-30     0.0236  ABC_Fund FTSE/JSE Capped SWIX     0.0214
+    ## 6 2012-12-31     0.0362  ABC_Fund FTSE/JSE Capped SWIX     0.0433
+
+``` r
+# Step 2 : Rolling 36-month regression
+
+# Set window size
+window_size <- 36
+
+# Creating a placeholder for results
+rolling_beta <- data.frame(
+  date = ABC_vs_BM$date[window_size:nrow(ABC_vs_BM)],
+  beta = NA_real_
+)
+
+# Calculating beta in each window
+for (i in window_size:nrow(ABC_vs_BM)) {
+  window_data <- ABC_vs_BM[(i - window_size + 1):i, ]
+  
+# Simple linear regression: ABC on Benchmark
+  model <- lm(Returns_ABC ~ Returns_BM, data = window_data)
+  rolling_beta$beta[i - window_size + 1] <- coef(model)[2]
+}
+# Step 3 : Plot Rolling Beta 
+
+# Plot the rolling 3-year beta
+ggplot(rolling_beta, aes(x = date, y = beta)) +
+  geom_line(color = "steelblue", size = 1) +
+  labs(title = "Rolling 3-Year Beta: ABC_Fund vs Benchmark",
+       x = "Date", y = "Beta") +
+  theme_minimal()
+```
+
+    ## Warning: Using `size` aesthetic for lines was deprecated in ggplot2 3.4.0.
+    ## ℹ Please use `linewidth` instead.
+    ## This warning is displayed once every 8 hours.
+    ## Call `lifecycle::last_lifecycle_warnings()` to see where this warning was
+    ## generated.
+
+![](README_files/figure-gfm/unnamed-chunk-2-1.png)<!-- -->
+
+Additionally, in order to evaluate ABC Fund’s positioning against the
+broader industry, I applied this same rolling beta logic to each peer
+fund using a function. I visualized the distribution of betas as a
+boxplot overlaid with a highlighted point for ABC_Fund. This confirmed
+that the fund had a lower beta than most peers at the latest date,
+suggesting a relatively defensive stance.
+
+``` r
+# How does my fund compare to my peers
+
+# Step 1)  Create a function to compute rolling beta for any fund
+# Rolling beta function
+get_rolling_beta <- function(df, benchmark_df, window = 36) {
+  
+# Check if enough data for rolling regression
+  if (nrow(df) < window) {
+    return(NULL)
+  }
+  
+# Merge with benchmark
+  merged_df <- left_join(df, benchmark_df, by = "date", suffix = c("_fund", "_bm"))
+  
+# Set up empty result
+  result <- data.frame(
+    date = merged_df$date[window:nrow(merged_df)],
+    beta = rep(NA, nrow(merged_df) - window + 1),
+    Name = unique(df$Name)
+  )
+  
+# Rolling regression
+  for (i in window:nrow(merged_df)) {
+    window_data <- merged_df[(i - window + 1):i, ]
+    model <- lm(Returns_fund ~ Returns_bm, data = window_data)
+    result$beta[i - window + 1] <- coef(model)[2]
+  }
+  
+  return(result)
+}
+
+# Split dataset by manager
+manager_list <- split(Active_Managers, Active_Managers$Name)
+
+# Apply rolling beta function
+rolling_betas_all <- lapply(manager_list, get_rolling_beta, benchmark_df = Benchmark)
+
+# Drop Nulls
+rolling_betas_all <- rolling_betas_all[!sapply(rolling_betas_all, is.null)]
+
+# Combine into one dataframe
+rolling_betas_df <- bind_rows(rolling_betas_all)
+
+# Comparing the distribution of rolling betas across managers (How ABC compares to peers) 
+library(ggplot2)
+library(dplyr)
+
+# Filter for the most recent date in the data
+latest_date <- max(rolling_betas_df$date, na.rm = TRUE)
+
+# Filter rolling betas for the latest window
+recent_betas <- rolling_betas_df %>%
+  filter(date == latest_date)
+
+# The function only worked on Active managers, not ABC_Fund
+# Need to manually calculate the latest 3-year beta for ABC_Fund and then add it to the dataframe
+
+unique(recent_betas$Name)
+```
+
+    ##   [1] "A105" "A131" "A183" "A209" "B106" "B132" "B184" "B210" "C133" "C159"
+    ##  [11] "C211" "C55"  "D160" "D186" "D56"  "D82"  "E135" "E187" "E213" "E57" 
+    ##  [21] "F162" "F188" "F214" "F32"  "F58"  "F6"   "G111" "G163" "G215" "G33" 
+    ##  [31] "G59"  "G85"  "H138" "H190" "H216" "H60"  "I139" "I165" "I217" "I35" 
+    ##  [41] "I61"  "I87"  "I9"   "J114" "J166" "J192" "J218" "J36"  "J62"  "J88" 
+    ##  [51] "K11"  "K141" "K193" "K219" "K37"  "K63"  "K89"  "L116" "L194" "L220"
+    ##  [61] "L38"  "L90"  "M117" "M13"  "M143" "M39"  "M65"  "M91"  "N14"  "N222"
+    ##  [71] "N92"  "O145" "O171" "O197" "O223" "O93"  "P120" "P146" "P172" "P224"
+    ##  [81] "P68"  "Q121" "Q147" "Q173" "Q199" "Q69"  "R148" "R174" "R200" "R96" 
+    ##  [91] "S123" "S175" "S97"  "T124" "T150" "T176" "T202" "T46"  "T98"  "U125"
+    ## [101] "U177" "U203" "V100" "V126" "V152" "V204" "V48"  "W101" "W127" "W153"
+    ## [111] "W179" "W205" "W23"  "W75"  "X102" "X128" "X180" "X206" "X24"  "Y103"
+    ## [121] "Y129" "Y181" "Y25"  "Y51"  "Y77"  "Z104" "Z130" "Z156" "Z208" "Z26"
+
+``` r
+# Step 1) Get the ABC_Fund's rolling beta data
+ABC_beta <- get_rolling_beta(ABC_Fund, benchmark_df = Benchmark, window = 36)
+
+# Step 2) Extract the most recent beta value
+ABC_latest_beta <- tail(ABC_beta, 1)
+
+# Step 3) Add it to the recent_betas dataframe
+recent_betas_with_ABC <- bind_rows(
+  recent_betas,
+  data.frame(
+    date = ABC_latest_beta$date,
+    beta = ABC_latest_beta$beta,
+    Name = "ABC_Fund"
+  )
+)
+
+# Step 4) Create boxplot over scatter
+ggplot(recent_betas_with_ABC, aes(x = "", y = beta)) +
+  geom_jitter(
+    aes(color = (Name == "ABC_Fund")),
+    width = 0.1, size = 2.5, alpha = 0.7
+  ) +
+  geom_boxplot(alpha = 0.3, outlier.shape = NA) +
+  scale_color_manual(values = c("grey60", "firebrick")) +
+  labs(
+    title = paste("Rolling 3-Year Beta (", format(latest_date, "%Y-%m"), "): ABC_Fund vs Peers"),
+    y = "Beta", x = "", color = "Fund"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+![](README_files/figure-gfm/unnamed-chunk-3-1.png)<!-- -->
+
+``` r
+# Confirm if beta is realistic (0.45)
+ABC_tail <- tail(ABC_vs_BM, 36)
+summary(lm(Returns_ABC ~ Returns_BM, data = ABC_tail))
+```
+
+    ## 
+    ## Call:
+    ## lm(formula = Returns_ABC ~ Returns_BM, data = ABC_tail)
+    ## 
+    ## Residuals:
+    ##       Min        1Q    Median        3Q       Max 
+    ## -0.038571 -0.015419  0.001663  0.014210  0.032446 
+    ## 
+    ## Coefficients:
+    ##             Estimate Std. Error t value Pr(>|t|)    
+    ## (Intercept) 0.005405   0.003276   1.650    0.108    
+    ## Returns_BM  0.399081   0.083613   4.773 3.38e-05 ***
+    ## ---
+    ## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+    ## 
+    ## Residual standard error: 0.01792 on 34 degrees of freedom
+    ## Multiple R-squared:  0.4012, Adjusted R-squared:  0.3836 
+    ## F-statistic: 22.78 on 1 and 34 DF,  p-value: 3.377e-05
+
+Next, I assessed how much of ABC_Fund’s returns were driven by benchmark
+exposure by comparing rolling R² values across funds. This helped
+determine whether the fund’s returns were explained largely by the
+benchmark or if they reflected more idiosyncratic strategies.
+
+``` r
+# How much does fund differ from rest of industry in terms of what drives returns
+# Compare R-sqaured values from regressions : Is fund more or less aligned with the benchmark than my peers are
+
+# Step 1) Create  function to calculate rolling R^2
+get_rolling_r2 <- function(df, benchmark_df, window = 36) {
+  if (nrow(df) < window) {
+    return(NULL)
+  }
+  
+  merged_df <- left_join(df, benchmark_df, by = "date", suffix = c("_fund", "_bm"))
+  
+  result <- data.frame(
+    date = merged_df$date[window:nrow(merged_df)],
+    r_squared = rep(NA_real_, nrow(merged_df) - window + 1),
+    Name = unique(df$Name)
+  )
+  
+  for (i in window:nrow(merged_df)) {
+    window_data <- merged_df[(i - window + 1):i, ]
+    model <- lm(Returns_fund ~ Returns_bm, data = window_data)
+    result$r_squared[i - window + 1] <- summary(model)$r.squared
+  }
+  
+  return(result)
+}
+
+# step 2)  Apply function to all peer funds
+
+# Split peer data into list by manager
+manager_list_r2 <- split(Active_Managers, Active_Managers$Name)
+
+# Apply rolling R^2 function to each manager
+rolling_r2_all <- lapply(manager_list_r2, get_rolling_r2, benchmark_df = Benchmark)
+
+# Drop Nulls
+rolling_r2_all <- rolling_r2_all[!sapply(rolling_r2_all, is.null)]
+
+# Combine into one dataframe
+rolling_r2_df <- bind_rows(rolling_r2_all)
+
+# Step 3)  Extract the latest R^2 for each manager
+
+# Get most recent date
+latest_date_r2 <- max(rolling_r2_df$date)
+
+# Filter to latest R^2s
+recent_r2 <- rolling_r2_df %>%
+  filter(date == latest_date_r2)
+
+# step 4)  Get ABC_Funds latest R^2
+
+# Merge ABC_Fund with Benchmark
+ABC_vs_BM_r2 <- ABC_Fund %>%
+  left_join(Benchmark, by = "date", suffix = c("_ABC", "_BM"))
+
+# Take latest 36 months
+ABC_tail_r2 <- tail(ABC_vs_BM_r2, 36)
+
+# Run regression
+model_ABC <- lm(Returns_ABC ~ Returns_BM, data = ABC_tail_r2)
+ABC_r2_latest <- summary(model_ABC)$r.squared
+
+
+# step 5) Plot : ABC_Fund vs Peer R^2s
+ggplot(recent_r2, aes(y = r_squared)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(aes(x = 1, y = r_squared), width = 0.1, alpha = 0.4, color = "grey40") +
+  annotate("point", x = 1, y = ABC_r2_latest, color = "red", size = 3) +
+  labs(
+    title = paste("Rolling 3-Year R² (", format(latest_date_r2, "%Y-%m"), "): ABC_Fund vs Peers"),
+    y = "R-squared",
+    x = ""
+  ) +
+  theme_minimal()
+```
+
+![](README_files/figure-gfm/unnamed-chunk-4-1.png)<!-- -->
+
+ABC_Fund had one of the lower R² values in the peer group, indicating
+that its performance was less benchmark-driven, likely reflecting more
+active management.
+
+I then turned to cumulative return performance over the full sample. I
+computed cumulative returns for ABC_Fund and all peers, and visualized
+this with a grey background of peers and ABC_Fund in red. To better
+illustrate peer dispersion, I also created a ribbon plot showing the
+interquartile range (IQR) of peer performance.
+
+``` r
+# Provide a nice visual illustration of my funds relative performance to peers over time
+
+# Step 1)  Calculate cumulative returns 
+
+# Function to compute cumulative returns
+# This function takes a group's data and its associated name (from .y), calculates cumulative returns
+compute_cum_returns <- function(df, group_info) {
+  df %>%
+    arrange(date) %>%
+    mutate(cum_return = cumprod(1 + Returns)) %>%
+    select(date, cum_return)  # DON'T include Name
+}
+
+# Apply to all active managers
+peer_returns <- Active_Managers %>%
+  group_by(Name) %>%
+  group_modify(compute_cum_returns) %>%  # 'Name' added automatically
+  ungroup()
+
+# Check column names 
+glimpse(ABC_Fund)
+```
+
+    ## Rows: 160
+    ## Columns: 3
+    ## $ date    <date> 2012-07-31, 2012-08-31, 2012-09-30, 2012-10-31, 2012-11-30, 2…
+    ## $ Returns <dbl> 0.0349878, 0.0303066, 0.0067147, 0.0340319, 0.0235661, 0.03623…
+    ## $ Name    <chr> "ABC_Fund", "ABC_Fund", "ABC_Fund", "ABC_Fund", "ABC_Fund", "A…
+
+``` r
+# ABC_Fund cumulative returns
+ABC_cum <- ABC_Fund %>%
+  arrange(date) %>%
+  mutate(cum_return = cumprod(1 + Returns)) %>%
+  select(date, cum_return, Name)
+
+
+# Step 2) Combine and plot cumulative returns over time
+all_cum_returns <- bind_rows(peer_returns, ABC_cum)
+
+ggplot(peer_returns, aes(x = date, y = cum_return, group = Name)) +
+  geom_line(color = "grey80") +
+  geom_line(data = ABC_cum, aes(x = date, y = cum_return), color = "red", size = 1.2) +
+  labs(
+    title = "Cumulative Returns: ABC_Fund vs Peers",
+    x = "Date", y = "Cumulative Return"
+  ) +
+  theme_minimal()
+```
+
+![](README_files/figure-gfm/unnamed-chunk-5-1.png)<!-- -->
+
+``` r
+# Step 3) Preparing Peer IQR for Ribbon Plot 
+
+# Compute the interquartile range (25th and 75th percentile) of cumulative returns at each date
+peer_iqr <- peer_returns %>%
+  group_by(date) %>%
+  summarise(
+    iqr_lower = quantile(cum_return, 0.25, na.rm = TRUE),
+    iqr_upper = quantile(cum_return, 0.75, na.rm = TRUE)
+  )
+
+# Plot Cumulative Returns with IQR Band and ABC_Fund Highlighted 
+
+ggplot() +
+  # Add IQR ribbon for peer dispersion (shaded area)
+  geom_ribbon(data = peer_iqr, aes(x = date, ymin = iqr_lower, ymax = iqr_upper),
+              fill = "lightblue", alpha = 0.4) +
+  
+  # Plot all peers in grey
+  geom_line(data = peer_returns, aes(x = date, y = cum_return, group = Name),
+            color = "grey70", size = 0.5, alpha = 0.7) +
+  
+  # Highlight ABC_Fund in red
+  geom_line(data = ABC_cum, aes(x = date, y = cum_return),
+            color = "red", size = 1.2) +
+  
+  # Axis labels and title
+  labs(
+    title = "Cumulative Returns: ABC_Fund vs Peers (IQR Shaded)",
+    x = "Date",
+    y = "Cumulative Return"
+  ) +
+  theme_minimal()
+```
+
+![](README_files/figure-gfm/unnamed-chunk-5-2.png)<!-- -->
+
+Lastly, I explored how ABC Fund’s returns varied in periods of high peer
+dispersion. I calculated the cross-sectional standard deviation and IQR
+of peer returns each month and plotted ABC_Fund’s return against these
+measures. The positive relationship indicated that ABC Fund tends to
+perform better in months when peer dispersion was high. This possibly
+reflects stronger relative stock-picking skill in volatile environments.
+
+All in all, this question showed that ABC_Fund was more defensive than
+peers (lower beta), more active (lower R²), and relatively successful in
+volatile markets.
+
+### Question 2 : Peaks and Trough
+
+In this question, I explored whether smaller stocks are more volatile
+than larger ones, and examined how peak-to-trough drawdowns vary across
+different size groups and sectors on the JSE over the past decade. The
+goal was to assess the relative riskiness of local equities through both
+volatility and downside performance.
+
+I began by loading and cleaning the holdings and returns data. Missing
+values were filtered out, and I ensured that key variables like Group
+and Weight were not missing.
+
+``` r
+# Load libraries
+library(tidyverse)
+library(lubridate)
+
+getwd()
+```
+
+    ## [1] "C:/Users/pmnha/Downloads/Tapiwa/Tapiwa"
+
+``` r
+# Load data for Question 2
+holdrets <- read_rds("Data/Hold_Rets_Sectors.rds")
+port_holds <- read_rds("Data/Fund_Holds.rds")
+
+# Quick peek at structure
+glimpse(holdrets)
+```
+
+    ## Rows: 384,054
+    ## Columns: 6
+    ## $ date    <date> 2015-01-02, 2015-01-02, 2015-01-02, 2015-01-02, 2015-01-02, 2…
+    ## $ Tickers <chr> "SAB", "NPN", "CFR", "MTN", "AGL", "SOL", "BTI", "SBK", "OML",…
+    ## $ Return  <dbl> -1.037350e-02, 9.306202e-03, -2.857143e-03, -1.991799e-02, -7.…
+    ## $ Weight  <dbl> 0.041875564, 0.106271643, 0.025070645, 0.080830696, 0.02894426…
+    ## $ Group   <chr> "Large_Caps", "Large_Caps", "Large_Caps", "Large_Caps", "Large…
+    ## $ Sector  <chr> "Industrials", "Industrials", "Industrials", "Industrials", "R…
+
+``` r
+# Check NA across all columns
+holdrets %>%
+  summarise(across(everything(), ~ sum(is.na(.))))
+```
+
+    ## # A tibble: 1 × 6
+    ##    date Tickers Return Weight Group Sector
+    ##   <int>   <int>  <int>  <int> <int>  <int>
+    ## 1     0       0     10      0  1383      0
+
+``` r
+# Filter out rows with missing values
+holdrets <- holdrets %>%
+  filter(complete.cases(.))
+
+# Remove rows missing Group or Weight (Group is critical for size analysis)
+holdrets <- holdrets %>%
+  filter(!is.na(Group), !is.na(Weight))
+```
+
+Are Smaller Stocks More Volatile?
+
+To test whether small caps are more volatile, I calculated standard
+deviation of returns per stock, grouped by size (Group), and visualised
+the distribution using a boxplot.
+
+``` r
+# Are smaller stocks more volatile than larger stocks locally ? 
+# Want to check for relationship between stock size (group) and return volatility
+
+# Step 1) Calculate return volatility per stock
+vol_by_ticker <- holdrets %>%
+  group_by(Tickers, Group) %>%
+  summarise(volatility = sd(Return, na.rm = TRUE), .groups = "drop")
+
+view(vol_by_ticker)
+
+# Step 2) Visualise volatility by size group 
+ggplot(vol_by_ticker, aes(x = Group, y = volatility, fill = Group)) +
+  geom_boxplot(alpha = 0.7, outlier.colour = "gray40", outlier.alpha = 0.6) +
+  labs(
+    title = "How Volatile Are Different Sized Stocks?",
+    subtitle = "Daily return volatility by size group (JSE stocks)",
+    x = "Size Group",
+    y = "Volatility (Standard Deviation)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold"),
+    plot.subtitle = element_text(margin = margin(b = 10))
+  )
+```
+
+![](README_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
+
+Peak-to-Trough Drawdowns : By Size Group
+
+Next, I assessed worst annual drawdowns across stock size groups using a
+rolling cumulative return approach. I grouped by year, sector, and size
+to track the worst drop from peak for each stock.
+
+``` r
+# Compare the typical peak-to-trough movement of different size groups and sectors for locally listed stocks for different years over the past decade.
+
+# Step 1) : Compute Rolling Peak-to-Trough Declines for each stock
+# Load packages 
+library(dplyr)
+library(tidyr)
+library(zoo)
+```
+
+    ## 
+    ## Attaching package: 'zoo'
+
+    ## The following objects are masked from 'package:base':
+    ## 
+    ##     as.Date, as.Date.numeric
+
+``` r
+# Arrange by Ticker and Date
+holdrets <- holdrets %>%
+  arrange(Tickers, date)
+
+# Group by stock
+drawdowns <- holdrets %>%
+  group_by(Tickers) %>%
+  mutate(
+    cum_return = cumprod(1 + Return),
+    cum_max = cummax(cum_return),
+    drawdown = cum_return / cum_max - 1
+  ) %>%
+  ungroup()
+
+# Step 2) Extract the Maximum Drawdown by year, sector and size
+library(lubridate)
+
+drawdown_summary <- drawdowns %>%
+  mutate(year = year(date)) %>%
+  group_by(year, Sector, Group, Tickers) %>%
+  summarise(max_dd = min(drawdown, na.rm = TRUE), .groups = "drop")
+
+# Step 3) Visualize peak-to-trough across Groups(using Boxplot)
+# Will show the distrubution of worst drawdowns by size group 
+
+library(ggplot2)
+
+ggplot(drawdown_summary, aes(x = Group, y = abs(max_dd), fill = Group)) +
+  geom_boxplot(alpha = 0.6) +
+  labs(
+    title = "How Big Are the Worst Drawdowns by Size Group?",
+    subtitle = "Peak-to-trough declines (annual, by stock)",
+    x = "Size Group", y = "Drawdown (as % loss)"
+  ) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = c("Large_Caps" = "#FF9999", "Mid_Caps" = "#99CC99", "Small_Caps" = "#99B2FF")) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "none")
+```
+
+![](README_files/figure-gfm/unnamed-chunk-8-1.png)<!-- -->
+
+Peak-to-Trough Drawdowns : By Sector
+
+I then repeated the analysis at the sector level, identifying which
+industries typically experience the worst annual losses.
+
+``` r
+# Let explore the same idea across sectors
+# Will help us understand which sectors typically face the worst annual losses
+
+# Step 1) Adding "Year" column so we can calculate per-year drawdowns 
+holdrets <- holdrets %>%
+  mutate(Year = year(date))
+
+# Step 2) For each stock in each year, calculate the cumulative return path
+# Then find the peak value along that path and compute how far it falls from that peak (drawdown = % loss from the peak)
+sector_drawdowns <- holdrets %>%
+  arrange(Tickers, date) %>%
+  group_by(Tickers, Sector, Year) %>%
+  mutate(
+    cumulative_return = cumprod(1 + Return),        # Product of 1 + daily return (running)
+    peak = cummax(cumulative_return),               # highest value reached up to that point
+    drawdown = cumulative_return / peak - 1         # % drop from peak at each point (drawdown)
+  ) %>%
+  summarise(
+    worst_drawdown = min(drawdown, na.rm = TRUE),   # pick worst drawdown in the year for that stock
+    .groups = "drop"
+  )
+
+# Step 3) Now visualise this : Using boxplot of worst annual drawdowns by Sector
+# Each point is a stock in a year, grouped by sector
+ggplot(sector_drawdowns, 
+       aes(x = fct_reorder(Sector, worst_drawdown, .fun = median), 
+           y = abs(worst_drawdown))) +
+  geom_boxplot(fill = "#86b3d1", alpha = 0.7, outlier.color = "grey40") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(
+    title = "Which Sectors Experience the Worst Annual Declines?",
+    subtitle = "Peak-to-trough drawdowns by sector (JSE stocks, annual)",
+    x = "Sector",
+    y = "Drawdown (as % loss)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+![](README_files/figure-gfm/unnamed-chunk-9-1.png)<!-- -->
+
+Bonus Insight :Do Smaller Stocks Within Sectors Fall More?
+
+Finally, I checked whether drawdown patterns differ by stock size within
+each sector, using faceted boxplots. This helped illustrate that small
+caps tend to be hit harder even within the same industry.
+
+``` r
+# Other interesting insights 
+# Do sector-level drawdowns vary by size group ?
+# (Do small caps in sector X draw down more than large caps in the same sector?)
+
+# Step 1) Group by year, ticker and calculate drawdown per stock per year
+drawdown_sector_size <- holdrets %>%
+  mutate(year = year(date)) %>%
+  group_by(Tickers, year, Sector, Group) %>%
+  summarise(drawdown = min(cumprod(1 + Return)) - 1, .groups = "drop")
+
+# Step 2) Plot a faceted Boxplot by sector, comparing size groups
+ggplot(drawdown_sector_size, aes(x = Group, y = -drawdown, fill = Group)) +
+  geom_boxplot(alpha = 0.6) +
+  facet_wrap(~ Sector, scales = "free_y") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    title = "Do Smaller Stocks Fall More Within Sectors?",
+    subtitle = "Peak-to-trough declines by sector and size group (JSE stocks, annual)",
+    x = "Size Group",
+    y = "Drawdown (as % loss)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+```
+
+![](README_files/figure-gfm/unnamed-chunk-10-1.png)<!-- -->
+
+All in all, this analysis confirmed that smaller stocks are generally
+more volatile and prone to deeper drawdowns than their larger
+counterparts. Furthermore, when comparing sectors, certain industries
+consistently show larger downside risk, but small caps tend to
+experience the worst declines within each sector. This suggests that
+size and sector both play a key role in downside exposure, and both
+should be considered when constructing diversified portfolios.
+
+### Question 3 : Momentum
+
+This question explores momentum as an investment signal on the JSE over
+the past decade. I evaluate the strength, consistency, and profitability
+of momentum using:
+
+- Information Coefficient (IC)
+
+- Signal Decay
+
+- Quintile Performance
+
+- Fund Analysis
+
+Loading data and required packages
+
+``` r
+# Load required libraries
+library(tidyverse)
+library(lubridate)
+ install.packages("here")
+```
+
+    ## Warning: package 'here' is in use and will not be installed
+
+``` r
+# Load return and fund holdings data (relative to project root)
+holdrets <- read_rds("Data/Hold_Rets_Sectors.rds")
+port_holds <- read_rds("Data/Fund_Holds.rds")
+```
+
+Momentum Signal Definition
+
+I define momentum as the cumulative return over the past 12 months,
+excluding the most recent month (a common and academically validated
+measure).
+
+``` r
+# Define Momentum :
+# Start by creating a 12-month trailing momentum signal for each stock
+
+# Will define momentum as Cumulative return over past 12 months, skipping the most recent month (textbook approach)
+
+# Create Momentum signal (12 month lagged returns, skipping 1 month)
+library(slider)
+
+# Calculate momentum per stock
+momentum_data <- holdrets %>%
+    group_by(Tickers) %>%
+    arrange(date) %>%
+    mutate(
+        # Skip the most recent month and sum the prior 11
+        momentum = slide_dbl(Return, ~ prod(1 + .x, na.rm = TRUE) - 1,
+                             .before = 12, .after = -2, .complete = TRUE)
+    ) %>%
+    ungroup()
+
+glimpse(momentum_data)
+```
+
+    ## Rows: 384,054
+    ## Columns: 7
+    ## $ date     <date> 2015-01-02, 2015-01-02, 2015-01-02, 2015-01-02, 2015-01-02, …
+    ## $ Tickers  <chr> "SAB", "NPN", "CFR", "MTN", "AGL", "SOL", "BTI", "SBK", "OML"…
+    ## $ Return   <dbl> -1.037350e-02, 9.306202e-03, -2.857143e-03, -1.991799e-02, -7…
+    ## $ Weight   <dbl> 0.041875564, 0.106271643, 0.025070645, 0.080830696, 0.0289442…
+    ## $ Group    <chr> "Large_Caps", "Large_Caps", "Large_Caps", "Large_Caps", "Larg…
+    ## $ Sector   <chr> "Industrials", "Industrials", "Industrials", "Industrials", "…
+    ## $ momentum <dbl> NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, N…
+
+Information Coefficient (IC)
+
+This is how well momentum predicts future returns. To measure the
+signal’s predictive power, I compute the Spearman rank correlation
+between the momentum signal and the next 3-month return. This was then
+visualised to show performance stability over time.
+
+``` r
+# Information Coefficent
+# Measure how well the momentum signal predicts future 3-month returns using Rank Correlation.
+
+# Add 3-month Forward Return by ticker
+momentum_data <- momentum_data %>%
+    group_by(Tickers) %>%
+    arrange(date) %>%
+    mutate(
+        forward_3m_ret = lead(Return, 1) + lead(Return, 2) + lead(Return, 3)
+    ) %>%
+    ungroup()
+
+# Compute IC (Rank correlation)
+# Keep only rows with valid momentum and forward returns
+ic_data <- momentum_data %>%
+    filter(!is.na(momentum), !is.na(forward_3m_ret)) %>%
+    group_by(date) %>%
+    summarise(
+        ic = cor(rank(momentum), rank(forward_3m_ret), method = "spearman")
+    )
+
+# Visualise IC over time
+ic_data %>%
+    ggplot(aes(x = date, y = ic)) +
+    geom_line(color = "steelblue") +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    labs(
+        title = "Information Coefficient Over Time",
+        y = "Spearman Rank Correlation",
+        x = "Date"
+    ) +
+    theme_minimal()
+```
+
+![](README_files/figure-gfm/unnamed-chunk-13-1.png)<!-- -->
+
+Signal Decay
+
+This basically asks the simple question, Do momentum ranking persist
+over time ? To assess the persistence of the momentum signal, I tracked
+its rank correlation with future signal values 1, 2, and 3 months ahead.
+
+``` r
+# Signal Decay
+# This is the correlation between the current momentum signal and future signal rankings, typically over the next 3 months.
+# Shows signal persistance
+
+# Step 1) Create lagged momentum signals
+momentum_decay_data <- momentum_data %>%
+    group_by(Tickers) %>%
+    arrange(date) %>%
+    mutate(
+        mom_lead_1 = lead(momentum, 1),
+        mom_lead_2 = lead(momentum, 2),
+        mom_lead_3 = lead(momentum, 3)
+    ) %>%
+    ungroup()
+
+# Step 2) Compute signal decay over time
+decay_by_month <- momentum_decay_data %>%
+    group_by(date) %>%
+    filter(!is.na(momentum) & !is.na(mom_lead_1) & !is.na(mom_lead_2) & !is.na(mom_lead_3)) %>%
+    summarise(
+        decay = mean(cor(momentum, mom_lead_1, method = "spearman"),
+                     cor(momentum, mom_lead_2, method = "spearman"),
+                     cor(momentum, mom_lead_3, method = "spearman")),
+        .groups = 'drop'
+    )
+
+# Step 3) Plot the decay
+ggplot(decay_by_month, aes(x = date, y = decay)) +
+    geom_line(color = "darkgreen") +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    labs(title = "Signal Decay Over Time",
+         x = "Date",
+         y = "Avg Spearman Correlation with Future Momentum")
+```
+
+![](README_files/figure-gfm/unnamed-chunk-14-1.png)<!-- -->
+
+Quintile Performance
+
+This refers to the spread between top vs bottom momentum stocks. To test
+profitability, I split stocks into momentum quintiles each month and
+computed forward 3-month returns.
+
+After that I plotted the cumulative long–short return and extracted,
+mean spread, median spread, and hit rate (probability of positive
+spread).
+
+``` r
+# Quintile Performance (Long vs Short)
+# For every date, assign each stock to a quintile based on its momentum signal.
+# Quintile 1 : Highest momentum (top 20%)
+# Quintile 2 : Lowedt momentum (bottom 20%)
+
+# Step 1) Assign quantiles based on momentum
+quintile_data <- momentum_data %>%
+    filter(!is.na(momentum), !is.na(forward_3m_ret)) %>%
+    group_by(date) %>%
+    mutate(
+        quintile = ntile(momentum, 5)
+    ) %>%
+    ungroup()
+
+# Step 2) Compute avergae forward return per quintile
+quintile_perf <- quintile_data %>%
+    group_by(date, quintile) %>%
+    summarise(
+        avg_fwd3m = mean(forward_3m_ret, na.rm = TRUE),
+        .groups = 'drop'
+    )
+
+# Step 3) Derive long-short (Top minus Bottom)
+ls_perf <- quintile_perf %>%
+    pivot_wider(names_from = quintile, values_from = avg_fwd3m, names_prefix = "Q") %>%
+    mutate(
+        long_short = Q1 - Q5
+    ) %>%
+    select(date, long_short)
+
+# Summary stats over full sample
+ls_summary <- ls_perf %>%
+    summarise(
+        mean_ls = mean(long_short, na.rm = TRUE),
+        median_ls = median(long_short, na.rm = TRUE),
+        hit_rate = mean(long_short > 0, na.rm = TRUE)
+    )
+
+ls_summary
+```
+
+    ## # A tibble: 1 × 3
+    ##    mean_ls median_ls hit_rate
+    ##      <dbl>     <dbl>    <dbl>
+    ## 1 0.000842  0.000806    0.527
+
+``` r
+# Step 4) Visualize cumulative long-short performance
+ls_perf %>%
+    mutate(cum_ls = cumprod(1 + long_short) - 1) %>%
+    ggplot(aes(x = date, y = cum_ls)) +
+    geom_line(color = "purple") +
+    labs(
+        title = "Cumulative Long‑Short Momentum Spread",
+        x = "Date",
+        y = "Cumulative Return (Q1‑Q5)"
+    ) +
+    theme_minimal()
+```
+
+![](README_files/figure-gfm/unnamed-chunk-15-1.png)<!-- -->
+
+Fund vs Momentum Signal
+
+Finally, I compared a local fund’s stock holdings to the momentum
+signal, checking if the fund tilts toward high-momentum stocks.
+
+``` r
+# Compare the Fund to the momemntum signal
+# Want to check whether colleagues fund appears to be capturing momentum signal and its performance relative to signal
+
+# Prepare Fund data to avoid name conflicts
+fund_clean <- port_holds %>%
+    select(date, Tickers, fund_weight = Weight)
+
+# Step 1) Join Fund Holdings with momentum data
+fund_mom <- fund_clean %>%
+    inner_join(momentum_data, by = c("date", "Tickers")) %>%
+    filter(!is.na(momentum)) %>%
+    select(date, Tickers, fund_weight, momentum)
+
+# Step 2) Compute average momentum ranking for fund holdings
+fund_rank_summary <- fund_mom %>%
+    group_by(date) %>%
+    mutate(rank_mom = rank(-momentum)) %>%
+    summarise(
+        avg_fund_rank = weighted.mean(rank_mom, fund_weight, na.rm = TRUE),
+        .groups = "drop"
+    )
+
+# Step 3) Compute universe average rank for each date (unweighted)
+univ_rank_summary <- momentum_data %>%
+    filter(!is.na(momentum)) %>%
+    group_by(date) %>%
+    mutate(rank_mom = rank(-momentum)) %>%
+    summarise(
+        avg_univ_rank = mean(rank_mom, na.rm = TRUE),
+        .groups = "drop"
+    )
+
+# Step 4) Combine the 2 summaries
+fund_vs_univ <- fund_rank_summary %>%
+    inner_join(univ_rank_summary, by = "date")
+
+# Step 5) Plot the comparison
+fund_vs_univ %>%
+    ggplot(aes(x = date)) +
+    geom_line(aes(y = avg_fund_rank), color = "blue") +
+    geom_line(aes(y = avg_univ_rank), color = "grey60", linetype = "dashed") +
+    labs(
+        title = "Average Momentum Rank: Fund vs Universe",
+        x = "Date",
+        y = "Average Rank (lower = stronger momentum)"
+    ) +
+    theme_minimal()
+```
+
+![](README_files/figure-gfm/unnamed-chunk-16-1.png)<!-- -->
+
+This was visualised as a time series plot comparing the fund’s average
+rank to the market’s average. Lower ranks indicate higher momentum
+exposure.
+
+All in all, the momentum signal demonstrated predictive power (positive
+IC), persistence (low decay), and profitability (positive long-short
+spreads). The fund’s holdings showed a moderate but varying alignment
+with the momentum signal over time, suggesting partial exposure but also
+room for improvement.
+
+### Question 4 : Volatility and GARCH Estimates
+
+In this section, I analyse the volatility and valuation profile of the
+South African Rand (ZAR) relative to other major currencies. My
+objective was to evaluate :
+
+- Whether the ZAR has been one of the most volatile currencies in recent
+  years.
+
+- Whether the ZAR performs better during G10 carry-friendly environments
+  and when it is relatively undervalued.
+
+Due to technical constraints, I focus on realised volatility, implied
+volatility, and valuation-based performance regimes.
+
+Loading data and packages
+
+``` r
+# Load required libraries
+library(tidyverse)
+library(lubridate)
+library(here)
+
+# Set working directory to project root for reproducibility
+setwd(here::here())
+
+# Load currency datasets
+cncy       <- read_rds("Data/currencies.rds")
+cncy_carry <- read_rds("Data/cncy_Carry.rds")
+cncy_value <- read_rds("Data/cncy_value.rds")
+cncy_iv    <- read_rds("Data/cncyIV.rds")
+bbdxy      <- read_rds("Data/bbdxy.rds")
+```
+
+Realised Volatility
+
+I calculated 30-day rolling annualised volatility for the ZAR and key
+comparators (Brazil, Japan, Australia, etc.), based on log returns.
+
+``` r
+# Realized volatility
+# Measure 30-day rolling annualised volaitility of ZAR comparing with other major currencies
+
+# Load required packages
+library(slider)
+library(scales)
+```
+
+    ## 
+    ## Attaching package: 'scales'
+
+    ## The following object is masked from 'package:purrr':
+    ## 
+    ##     discard
+
+    ## The following object is masked from 'package:readr':
+    ## 
+    ##     col_factor
+
+``` r
+# Step 1) Define currencies to analyse
+major_currencies <- c("SouthAfrica_Cncy", "US_Cncy", "Euro_Cncy",
+                      "UK_Cncy", "Japan_Cncy", "Australia_Cncy",
+                      "Brazil_Cncy")
+
+# Step 2) Filter and Compute log returns
+vol_data <- cncy %>%
+    filter(Name %in% major_currencies) %>%
+    arrange(Name, date) %>%
+    group_by(Name) %>%
+    mutate(
+        ret = log(Price / lag(Price))
+    ) %>%
+    filter(!is.na(ret)) %>%
+    # Rolling 30-day annualised vol: std dev × sqrt(252)
+    mutate(
+        vol_30d = slide_dbl(ret, sd, .before = 29, .complete = TRUE) * sqrt(252)
+    ) %>%
+    ungroup()
+
+# Step 3) Quick Plot of ZAR vs others
+vol_data %>%
+    filter(Name %in% c("SouthAfrica_Cncy", "Brazil_Cncy", "Australia_Cncy", "Japan_Cncy")) %>%
+    ggplot(aes(x = date, y = vol_30d, color = Name)) +
+    geom_line(size = 0.8, alpha = 0.8) +
+    scale_y_continuous(labels = percent_format(accuracy = 1)) +
+    labs(
+        title = "30-Day Rolling Annualised Volatility",
+        subtitle = "ZAR vs Selected Peers",
+        x = "Date", y = "Annualised Volatility",
+        color = "Currency"
+    ) +
+    theme_minimal()
+```
+
+    ## Warning: Removed 87 rows containing missing values or values outside the scale range
+    ## (`geom_line()`).
+
+![](README_files/figure-gfm/unnamed-chunk-18-1.png)<!-- --> The
+resulting plot highlights that ZAR consistently exhibits higher realised
+volatility than its G10 and EM counterparts. This is particularly true
+during risk-off or macro shock periods.
+
+Implied Volatility
+
+To capture market expectations of future risk, I use the implied
+volatility (IV) series for ZAR, Brazil, and Japan:
+
+``` r
+# This captures market expectations about future volatility
+
+# Step 1) Filter for selected IV series
+iv_plot_data <- cncy_iv %>%
+    filter(Name %in% c("SouthAfrica_IV", "Brazil_IV", "Japan_IV")) %>%
+    mutate(Name = str_replace(Name, "_IV", ""))  # clean label
+
+# Step 2) Plot
+ggplot(iv_plot_data, aes(x = date, y = Price, color = Name)) +
+    geom_line(alpha = 0.8) +
+    labs(
+        title = "Implied Volatility Comparison",
+        subtitle = "ZAR vs Selected Peers",
+        y = "Implied Volatility (%)",
+        x = "Date",
+        color = "Currency"
+    ) +
+    theme_minimal()
+```
+
+![](README_files/figure-gfm/unnamed-chunk-19-1.png)<!-- --> This
+confirms that implied volatility for ZAR often leads its peers, further
+affirming its status as a high-risk, high-beta currency in the eyes of
+the market.
+
+Valuation Regime Analysis
+
+Next, I test the hypothesis that ZAR performs better when undervalued
+(as might happen in risk-on carry trade environments).I did this using
+value deciles, I defined a “cheap” regime as the top 30% of ZAR value:
+
+``` r
+# Investigating how the ZAR has performed during periods where it was "cheap"
+# Confirm value data is loaded
+glimpse(cncy_value)
+```
+
+    ## Rows: 8,240
+    ## Columns: 3
+    ## $ date  <date> 1990-01-01, 1990-01-02, 1990-01-03, 1990-01-04, 1990-01-05, 199…
+    ## $ Name  <chr> "DBPPPUSF", "DBPPPUSF", "DBPPPUSF", "DBPPPUSF", "DBPPPUSF", "DBP…
+    ## $ Price <dbl> 98.4211, 99.5730, 99.8575, 98.7614, 98.7911, 98.7413, 99.6439, 9…
+
+``` r
+# Check available currency names
+unique(cncy_value$Name)
+```
+
+    ## [1] "DBPPPUSF"
+
+``` r
+# Step 1) Compute ZAR daily returns
+zar_value <- cncy_value %>%
+    arrange(date) %>%
+    mutate(
+        ret = Price / lag(Price) - 1
+    )
+
+# Step 2) Create value quantiles for ZAR
+zar_value <- zar_value %>%
+    mutate(
+        value_quantile = ntile(Price, 10),  # Deciles
+        is_cheap = value_quantile >= 8      # Top 30% = "cheap"
+    )
+
+# Step 3) Calculate cumulative returns by regime
+zar_value_plot <- zar_value %>%
+    filter(!is.na(ret)) %>%
+    group_by(is_cheap) %>%
+    arrange(date) %>%
+    mutate(cum_return = cumprod(1 + ret)) %>%
+    ungroup()
+
+# Step 4: Plot
+ggplot(zar_value_plot, aes(x = date, y = cum_return, color = factor(is_cheap))) +
+    geom_line(size = 1) +
+    labs(
+        title = "ZAR Cumulative Return in Cheap vs Expensive Valuation Regimes",
+        subtitle = "Based on ZAR’s Own Value Deciles (Top 30% = Cheap)",
+        x = "Date", y = "Cumulative Return",
+        color = "ZAR Cheap?"
+    ) +
+    theme_minimal()
+```
+
+![](README_files/figure-gfm/unnamed-chunk-20-1.png)<!-- --> The
+resulting chart shows that ZAR cumulative returns tend to be stronger in
+“cheap” valuation regimes, consistent with the idea that investors
+favour ZAR during risk-seeking environments.
+
+All in all, my analysis supports both claims. ZAR is indeed among the
+most volatile currencies, based on both realised and implied volatility
+and it performs well in undervalued states. This is in line with global
+risk-on cycles and favourable G10 carry conditions.
+
+Although I did not estimate GARCH models here due to limitations and
+errors that I ran into, the rolling volatilities, implied volatility
+data, and conditional performance plots serve as compelling proxies for
+volatility behaviour and market sentiment.
+
+### Question 5 : Portfolio Construction
+
+In this question, I was tasked with constructing a Global Balanced Index
+Fund portfolio using a mix of tradeable global indices provided in the
+datasets (MAA.rds and msci.rds)
+
+The goal was to build a long-only portfolio that adheres to specific
+exposure contraints and is optimized based on risk (standard deviation)
+using monthly return data post 2010.
+
+Loading data and packages
+
+``` r
+# Load required packages and data
+library(tidyverse)
+library(lubridate)
+
+# Set working directory to project root
+setwd(here::here())
+
+# Load series
+MAA  <- read_rds("data/MAA.rds")  %>% filter(Ticker %in% c("LUACTRUU Index", "LUAGTRUU Index", "BCOMTR Index", "LP05TREH Index"))
+msci <- read_rds("data/msci.rds") %>% filter(Name  %in% c("MSCI ACWI", "MSCI USA", "MSCI RE", "MSCI Jap", "MSCI China"))
+```
+
+Data preparation Using a custom function, I calculated monthly returns
+for each asset and filtered for those with at least 60 months of
+history.
+
+``` r
+# Step 1) Prepare Monthly Returns
+# Question wants monthly returns
+
+# Create Helper Function (Monthly returns calculator)
+library(PerformanceAnalytics)
+```
+
+    ## Loading required package: xts
+
+    ## 
+    ## ######################### Warning from 'xts' package ##########################
+    ## #                                                                             #
+    ## # The dplyr lag() function breaks how base R's lag() function is supposed to  #
+    ## # work, which breaks lag(my_xts). Calls to lag(my_xts) that you type or       #
+    ## # source() into this session won't work correctly.                            #
+    ## #                                                                             #
+    ## # Use stats::lag() to make sure you're not using dplyr::lag(), or you can add #
+    ## # conflictRules('dplyr', exclude = 'lag') to your .Rprofile to stop           #
+    ## # dplyr from breaking base R's lag() function.                                #
+    ## #                                                                             #
+    ## # Code in packages is not affected. It's protected by R's namespace mechanism #
+    ## # Set `options(xts.warn_dplyr_breaks_lag = FALSE)` to suppress this warning.  #
+    ## #                                                                             #
+    ## ###############################################################################
+
+    ## 
+    ## Attaching package: 'xts'
+
+    ## The following objects are masked from 'package:dplyr':
+    ## 
+    ##     first, last
+
+    ## 
+    ## Attaching package: 'PerformanceAnalytics'
+
+    ## The following object is masked from 'package:graphics':
+    ## 
+    ##     legend
+
+``` r
+get_monthly_returns <- function(df, price_col, name_col) {
+    df %>%
+        mutate(month = floor_date(date, "month")) %>%
+        group_by(!!sym(name_col), month) %>%
+        summarise(price = last(!!sym(price_col)), .groups = "drop") %>%
+        group_by(!!sym(name_col)) %>%
+        arrange(month) %>%
+        mutate(ret = price / lag(price) - 1) %>%
+        filter(!is.na(ret)) %>%
+        rename(!!name_col := !!sym(name_col)) # keeps names clean and avoids duplicate 'date'
+}
+
+# Step 2) Apply function to both datasets
+# Calculate monthly returns for both datasets (Make sure they are aligned)
+MAA_ret <- get_monthly_returns(MAA, price_col = "Price", name_col = "Ticker")
+msci_ret <- get_monthly_returns(msci, price_col = "Price", name_col = "Name")
+```
+
+Filtered for valid assets :
+
+``` r
+# Step 3) Filter Valid Assets
+# Question needs assets with at least 5 years (60 months) of data and data must be after 2010
+# Create filter function
+filter_assets <- function(ret_data, name_col = "Name") {
+    ret_data %>%
+        group_by(!!sym(name_col)) %>%
+        filter(n() >= 60) %>%
+        ungroup()
+}
+
+# Apply to both datasets
+MAA_ret_filt <- filter_assets(MAA_ret, name_col = "Ticker")
+msci_ret_filt <- filter_assets(msci_ret, name_col = "Name")
+
+# Confirm the filtering process worked
+glimpse(MAA_ret_filt)
+```
+
+    ## Rows: 948
+    ## Columns: 4
+    ## $ Ticker <chr> "BCOMTR Index", "LP05TREH Index", "LUACTRUU Index", "LUAGTRUU I…
+    ## $ month  <date> 2002-02-01, 2002-02-01, 2002-02-01, 2002-02-01, 2002-03-01, 20…
+    ## $ price  <dbl> 151.673, 111.890, 1220.230, 1174.170, 167.182, 111.110, 1197.56…
+    ## $ ret    <dbl> 2.591280e-02, 0.000000e+00, 6.599408e-03, 9.231325e-03, 1.02252…
+
+``` r
+glimpse(msci_ret_filt)
+```
+
+    ## Rows: 1,704
+    ## Columns: 4
+    ## $ Name  <chr> "MSCI Jap", "MSCI USA", "MSCI Jap", "MSCI USA", "MSCI Jap", "MSC…
+    ## $ month <date> 1990-02-01, 1990-02-01, 1990-03-01, 1990-03-01, 1990-04-01, 199…
+    ## $ price <dbl> 4802.359, 559.470, 3871.152, 572.231, 3920.013, 560.093, 4481.07…
+    ## $ ret   <dbl> -0.103388293, 0.013991844, -0.193906162, 0.022809087, 0.01262182…
+
+After filtering, I merged both datasets into a clean return matrix, and
+converted it to an xts object for optimization.
+
+``` r
+# Step 4) Combine the 2 return datasets into a single dataset
+# Dataset will be used to answer the question
+library(janitor)
+```
+
+    ## 
+    ## Attaching package: 'janitor'
+
+    ## The following objects are masked from 'package:stats':
+    ## 
+    ##     chisq.test, fisher.test
+
+``` r
+combined_ret <- bind_rows(
+    MAA_ret_filt %>% rename(Name = Ticker),
+    msci_ret_filt
+) %>%
+    clean_names()  # standardizing column names
+
+glimpse(combined_ret)
+```
+
+    ## Rows: 2,652
+    ## Columns: 4
+    ## $ name  <chr> "BCOMTR Index", "LP05TREH Index", "LUACTRUU Index", "LUAGTRUU In…
+    ## $ month <date> 2002-02-01, 2002-02-01, 2002-02-01, 2002-02-01, 2002-03-01, 200…
+    ## $ price <dbl> 151.673, 111.890, 1220.230, 1174.170, 167.182, 111.110, 1197.560…
+    ## $ ret   <dbl> 2.591280e-02, 0.000000e+00, 6.599408e-03, 9.231325e-03, 1.022529…
+
+``` r
+# Step 6) Filter Data to Post 2010 period
+combined_ret_post2010 <- combined_ret %>%
+    filter(month >= as.Date("2010-01-01"))
+
+# Confirm dimensions and available names
+glimpse(combined_ret_post2010)
+```
+
+    ## Rows: 1,278
+    ## Columns: 4
+    ## $ name  <chr> "BCOMTR Index", "LP05TREH Index", "LUACTRUU Index", "LUAGTRUU In…
+    ## $ month <date> 2010-01-01, 2010-01-01, 2010-01-01, 2010-01-01, 2010-02-01, 201…
+    ## $ price <dbl> 258.9532, 158.2947, 1919.8200, 1756.9100, 268.5674, 158.8690, 19…
+    ## $ ret   <dbl> -0.072779218, 0.018814917, 0.016315511, 0.014528656, 0.037127172…
+
+``` r
+unique(combined_ret_post2010$name)
+```
+
+    ## [1] "BCOMTR Index"   "LP05TREH Index" "LUACTRUU Index" "LUAGTRUU Index"
+    ## [5] "MSCI ACWI"      "MSCI China"     "MSCI Jap"       "MSCI RE"       
+    ## [9] "MSCI USA"
+
+``` r
+library(tidyr)
+
+# Step 7: Pivot data to wide format for portfolio analysis
+wide_ret <- combined_ret_post2010 %>%
+    select(month, name, ret) %>%
+    pivot_wider(names_from = name, values_from = ret)
+
+# Confirm structure
+glimpse(wide_ret)
+```
+
+    ## Rows: 142
+    ## Columns: 10
+    ## $ month            <date> 2010-01-01, 2010-02-01, 2010-03-01, 2010-04-01, 2010…
+    ## $ `BCOMTR Index`   <dbl> -0.072779218, 0.037127172, -0.012423697, 0.019442689,…
+    ## $ `LP05TREH Index` <dbl> 0.0188149170, 0.0036280431, 0.0122704870, 0.005791625…
+    ## $ `LUACTRUU Index` <dbl> 0.016315511, 0.003552416, 0.002989661, 0.018200166, -…
+    ## $ `LUAGTRUU Index` <dbl> 0.0145286560, 0.0041151795, -0.0074880678, 0.00949780…
+    ## $ `MSCI ACWI`      <dbl> -0.043209267, 0.012734813, 0.064328096, 0.001688948, …
+    ## $ `MSCI China`     <dbl> -0.086291639, 0.022050423, 0.053826732, -0.005837903,…
+    ## $ `MSCI Jap`       <dbl> 0.018982013, 0.011191380, 0.049941422, -0.001563515, …
+    ## $ `MSCI RE`        <dbl> -0.060191107, 0.026338964, 0.059282371, 0.020544919, …
+    ## $ `MSCI USA`       <dbl> -0.0353684829, 0.0301634914, 0.0594126374, 0.01571746…
+
+Portfolio Optimization
+
+I constructed a portfolio using PortfolioAnalytics, adding constraints
+and optimizing based on standard deviation.
+
+``` r
+# Portfolio optimization
+
+# STEP 1) Load required packages
+library(PortfolioAnalytics)
+```
+
+    ## Loading required package: foreach
+
+    ## 
+    ## Attaching package: 'foreach'
+
+    ## The following objects are masked from 'package:purrr':
+    ## 
+    ##     accumulate, when
+
+    ## Registered S3 method overwritten by 'PortfolioAnalytics':
+    ##   method           from
+    ##   print.constraint ROI
+
+``` r
+library(tidyverse)
+library(PerformanceAnalytics)
+library(ROI)
+```
+
+    ## ROI: R Optimization Infrastructure
+
+    ## Registered solver plugins: nlminb, symphony, quadprog.
+
+    ## Default solver: auto.
+
+    ## 
+    ## Attaching package: 'ROI'
+
+    ## The following objects are masked from 'package:PortfolioAnalytics':
+    ## 
+    ##     is.constraint, objective
+
+``` r
+library(ROI.plugin.quadprog)
+library(xts)
+library(janitor)
+
+# STEP 2) Ensure column names are clean
+wide_ret <- wide_ret %>% clean_names()
+
+# STEP 3) Convert returns to xts object
+returns_xts <- xts(wide_ret[,-1], order.by = wide_ret$month)
+colnames(returns_xts) <- make.names(colnames(returns_xts))
+
+
+# STEP 4) Initialize portfolio with assets
+assets <- colnames(returns_xts)
+# Define groups
+group_list <- list(
+    Commodities = which(grepl("BCOMTR", assets)),
+    Bonds = which(grepl("LPO5TREH|LUACTRUU|LUAGTRUU", assets)),
+    Equities = which(grepl("MSCI", assets))
+)
+
+# STEP 5) Add constraints
+port_spec <- portfolio.spec(assets = assets) %>%
+    add.constraint(type = "full_investment") %>%
+    add.constraint(type = "long_only") %>%
+    add.constraint(type = "group",
+                   groups = group_list,
+                   group_min = c(0, 0, 0),  # allow 0% allocations
+                   group_max = c(0.15, 0.25, 0.60)) %>%
+    add.constraint(type = "box", min = 0, max = 0.35) %>%
+    add.objective(type = "risk", name = "StdDev")
+
+# Step 6) Run optimization 
+opt_result <- optimize.portfolio(
+    R = returns_xts,
+    portfolio = port_spec,
+    optimize_method = "ROI",
+    trace = TRUE
+)
+```
+
+The optimized weights respected all constraints. Below is a sorted table
+of asset allocations.
+
+``` r
+# Step 7) Extract the weights
+weights <- extractWeights(opt_result)
+print(weights)
+```
+
+    ##   bcomtr_index lp05treh_index luactruu_index luagtruu_index      msci_acwi 
+    ##   6.089302e-02   3.500000e-01   1.869051e-01   3.500000e-01   7.210804e-17 
+    ##     msci_china       msci_jap        msci_re       msci_usa 
+    ##  -3.469447e-18   5.220188e-02  -8.551211e-19   6.255887e-18
+
+``` r
+# Present weights in a nice table
+# Load packages
+library(knitr)
+library(dplyr)
+
+# Create tidy table of weights
+weights_tbl <- tibble(
+    Asset = names(weights),
+    Weight = as.numeric(weights)
+) %>%
+    arrange(desc(Weight))  # Largest to smallest
+
+# Display the weights in a nice table
+kable(weights_tbl, digits = 4, caption = "Optimized Portfolio Weights (Post-2010)")
+```
+
+| Asset          | Weight |
+|:---------------|-------:|
+| luagtruu_index | 0.3500 |
+| lp05treh_index | 0.3500 |
+| luactruu_index | 0.1869 |
+| bcomtr_index   | 0.0609 |
+| msci_jap       | 0.0522 |
+| msci_acwi      | 0.0000 |
+| msci_usa       | 0.0000 |
+| msci_re        | 0.0000 |
+| msci_china     | 0.0000 |
+
+Optimized Portfolio Weights (Post-2010)
+
+Portfolio Performance
+
+To assess performance, I computed and plotted the cumulative returns of
+the optimized portfolio.
+
+``` r
+# Create a portfolio performance chart
+# Load required libraries
+library(ggplot2)
+
+# Step 1) Calculate weighted returns
+weighted_returns <- returns_xts %*% weights
+
+# Step 2) Convert to xts object and name the column
+portfolio_returns_xts <- xts(weighted_returns, order.by = index(returns_xts))
+colnames(portfolio_returns_xts) <- "Portfolio"
+
+# Step 3) Calculate cumulative return
+cumulative_returns <- cumprod(1 + portfolio_returns_xts)
+
+# Step 4) Plot the cumulative return
+autoplot(cumulative_returns, facets = NULL) +
+    labs(
+        title = "Cumulative Return of Optimized Portfolio (Post-2010)",
+        y = "Portfolio Value",
+        x = "Date"
+    ) +
+    theme_minimal()
+```
+
+![](README_files/figure-gfm/unnamed-chunk-27-1.png)<!-- -->
+
+All in all, after filtering for assets with enough history, I
+constructed an optimized long-only portfolio that respects the given
+constraints on asset class exposure. The final allocation strikes a
+balance between risk diversification and return consistency, and the
+cumulative return plot confirms the strategy’s stable performance
+post-2010.
