@@ -1,6 +1,6 @@
 ---
 title: "README"
-output: html_document
+output: github_document
 ---
 
 
@@ -954,8 +954,8 @@ library(lubridate)
 setwd(here::here())
 
 # Load series
-MAA  <- read_rds("Data/MAA.rds")  %>% filter(Ticker %in% c("LUACTRUU Index", "LUAGTRUU Index", "BCOMTR Index", "LP05TREH Index"))
-msci <- read_rds("Data/msci.rds") %>% filter(Name  %in% c("MSCI ACWI", "MSCI USA", "MSCI RE", "MSCI Jap", "MSCI China"))
+MAA  <- read_rds("data/MAA.rds")  %>% filter(Ticker %in% c("LUACTRUU Index", "LUAGTRUU Index", "BCOMTR Index", "LP05TREH Index"))
+msci <- read_rds("data/msci.rds") %>% filter(Name  %in% c("MSCI ACWI", "MSCI USA", "MSCI RE", "MSCI Jap", "MSCI China"))
 ```
 
 Data preparation 
